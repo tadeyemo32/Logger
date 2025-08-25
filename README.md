@@ -2,7 +2,7 @@
 # Logger - Header-Only C++ Logging Library
 
 **Version:** 2.0  
-**Author:** Tadeyemo32  
+**Author:** tadeyemo32  
 **License:** MIT  
 
 ---
