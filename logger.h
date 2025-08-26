@@ -68,6 +68,8 @@ private:
     size_t maxSizeBytes;
     std::string fileName;
     bool firstJsonEntry;
+    bool dirCreated = false; 
+    std::string dirC;
 
     std::filesystem::path getFullPath() const {
         std::string ext;
@@ -132,6 +134,8 @@ private:
             if (!std::filesystem::create_directory(dirPath)) {
                 throw std::runtime_error("Failed to create logs directory.");
             }
+            dirCreated = false ; 
+           dirC = current_time(); 
         }
 
         std::filesystem::path filePath = getFullPath();
@@ -156,8 +160,11 @@ private:
         if (!file.is_open()) {
             throw std::runtime_error("Failed to open log file: " + filePath.string());
         }
+        if (dirCreated){
+           log("Succefully Created Directory",LogType::DEBUG,dirC); 
+        }
 
-        log("Logger initialized", LogType::INFO);
+        log("Logger initialized", LogType::DEBUG);
     }
 
 public:
@@ -203,6 +210,38 @@ public:
         }
     }
 
+
+
+
+      void log(const std::string &msg, LogType type,std::string t) {
+        std::lock_guard<std::mutex> lock(mtx);
+        rotate_if_needed();
+        if (file.is_open()) {
+            if (format == FormatType::JSON) {
+                if (!firstJsonEntry) {
+                    file << ",\n";
+                } else {
+                    firstJsonEntry = false;
+                }
+            }
+            
+            file << serialize(msg, type);
+            
+            if (format != FormatType::JSON) {
+                file << std::endl;
+            }
+            
+            file.flush();             
+            if (debugMode) {
+                std::cout << "[" << t << "] ["
+                          << logTypeToString(type) << "] "
+                          << msg << std::endl;
+            }
+        }
+    }
+
+
+
     void setDebugStatus(bool status) {
         std::lock_guard<std::mutex> lock(mtx);
         debugMode = status;
@@ -210,6 +249,7 @@ public:
 
     ~Logger() {
         std::lock_guard<std::mutex> lock(mtx);
+    
         if (file.is_open()) {
             if (format == FormatType::JSON) {
                 file << "\n]";
