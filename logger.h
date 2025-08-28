@@ -11,6 +11,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <memory>
 
 namespace Log {
 
@@ -67,9 +68,10 @@ private:
     bool debugMode;
     size_t maxSizeBytes;
     std::string fileName;
+    std::string logDirectory;
     bool firstJsonEntry;
-    bool dirCreated = false; 
-    std::string dirC;
+    bool dirCreated;
+    bool jsonArrayStarted;
 
     std::filesystem::path getFullPath() const {
         std::string ext;
@@ -79,7 +81,12 @@ private:
             case FormatType::JSON: ext = ".json"; break;
             case FormatType::XML:  ext = ".xml"; break;
         }
-        return std::filesystem::path("../logs") / (fileName + ext);
+        
+        if (logDirectory.empty()) {
+            return std::filesystem::path(fileName + ext);
+        }
+        
+        return std::filesystem::path(logDirectory) / (fileName + ext);
     }
 
     void rotate_if_needed() {
@@ -93,11 +100,7 @@ private:
             for (auto &c : timestamp) if (c == ':' || c == ' ') c = '-';
             std::filesystem::rename(path, path.string() + "." + timestamp);
             
-            file.open(path, std::ios::out | std::ios::app);
-            if (format == FormatType::JSON) {
-                firstJsonEntry = true;
-                file << "[\n";
-            }
+            openFile(); 
         }
     }
 
@@ -107,10 +110,10 @@ private:
             case FormatType::TXT:
                 return "[" + ts + "] [" + logTypeToString(type) + "] " + msg;
             case FormatType::CSV:
-                return ts + "," + logTypeToString(type) + ",\"" + msg + "\"";
+                return ts + "," + logTypeToString(type) + ",\"" + escape_json(msg) + "\"";
             case FormatType::JSON:
             {
-                std::string jsonEntry = 
+                std::string jsonEntry =
                     "  {\n"
                     "    \"timestamp\": \"" + ts + "\",\n"
                     "    \"log_type\": \"" + logTypeToString(type) + "\",\n"
@@ -119,49 +122,85 @@ private:
                 return jsonEntry;
             }
             case FormatType::XML:
-                return "<log>\n  <timestamp>" + ts + "</timestamp>\n  <type>" + 
-                       logTypeToString(type) + "</type>\n  <message>" + msg + 
+                return "<log>\n  <timestamp>" + ts + "</timestamp>\n  <type>" +
+                       logTypeToString(type) + "</type>\n  <message>" + escape_json(msg) +
                        "</message>\n</log>";
+            default:
+                return msg;
         }
-        return msg;
     }
 
-    Logger(const std::string &fname, FormatType fmt, size_t maxMB, bool dbg)
-        : fileName(fname), format(fmt), debugMode(dbg), maxSizeBytes(maxMB * 1024 * 1024), firstJsonEntry(true)
-    {
-        std::filesystem::path dirPath = "../logs";
-        if (!std::filesystem::exists(dirPath)) {
-            if (!std::filesystem::create_directory(dirPath)) {
-                throw std::runtime_error("Failed to create logs directory.");
-            }
-            dirCreated = false ; 
-           dirC = current_time(); 
-        }
-
+    void openFile() {
         std::filesystem::path filePath = getFullPath();
         bool fileExists = std::filesystem::exists(filePath);
         
-        if (format == FormatType::JSON && fileExists) {
-     
-            file.open(filePath, std::ios::out | std::ios::in | std::ios::app);
-            if (file.is_open()) {
-                file.seekp(-1, std::ios::end);
-                char lastChar;
-                              file << ",";
-                firstJsonEntry = false;
-            }
-        } else {
-            file.open(filePath, std::ios::out | std::ios::app);
-            if (format == FormatType::JSON) {
-                file << "[\n";
-            }
-        }
-
+        file.open(filePath, std::ios::out | std::ios::app);
+        
         if (!file.is_open()) {
             throw std::runtime_error("Failed to open log file: " + filePath.string());
         }
-        if (dirCreated){
-           log("Succefully Created Directory",LogType::DEBUG,dirC); 
+
+        if (format == FormatType::JSON) {
+            if (!fileExists || std::filesystem::file_size(filePath) == 0) {
+                file << "[\n";
+                firstJsonEntry = true;
+                jsonArrayStarted = true;
+            } else {
+                file.close();                 
+                std::ifstream inFile(filePath, std::ios::in);
+                if (inFile.is_open()) {
+                    inFile.seekg(-1, std::ios::end);
+                    char lastChar;
+                    inFile.get(lastChar);
+                    inFile.close();
+                    
+                    file.open(filePath, std::ios::out | std::ios::app);
+                    
+                    if (lastChar == ']') {
+                        file.seekp(-1, std::ios::end);
+                        file << ",";
+                        firstJsonEntry = false;
+                        jsonArrayStarted = true;
+                    } else {
+                        file.close();
+                        file.open(filePath, std::ios::out | std::ios::trunc);
+                        file << "[\n";
+                        firstJsonEntry = true;
+                        jsonArrayStarted = true;
+                    }
+                }
+            }
+        }
+    }
+
+    Logger(const std::string &fname, FormatType fmt, size_t maxMB, bool dbg, const std::string &dir = "")
+        : fileName(fname), format(fmt), debugMode(dbg), maxSizeBytes(maxMB * 1024 * 1024),
+          logDirectory(dir), firstJsonEntry(true), dirCreated(false), jsonArrayStarted(false)
+    {
+        std::filesystem::path dirPath;
+        
+        if (logDirectory.empty()) {
+            dirPath = "../logs";
+        } else {
+            dirPath = logDirectory;
+        }
+
+        if (!std::filesystem::exists(dirPath)) {
+            if (std::filesystem::create_directories(dirPath)) {
+                dirCreated = true;
+                if (debugMode) {
+                    std::cout << "[" << current_time() << "] [Debug] Created log directory: "
+                              << std::filesystem::absolute(dirPath) << std::endl;
+                }
+            } else {
+                throw std::runtime_error("Failed to create logs directory: " + dirPath.string());
+            }
+        }
+
+        openFile();
+
+        if (dirCreated) {
+            log("Successfully created directory: " + dirPath.string(), LogType::DEBUG);
         }
 
         log("Logger initialized", LogType::DEBUG);
@@ -174,18 +213,24 @@ public:
     static Logger &getInstance(
         const std::string &fname,
         FormatType fmt = FormatType::TXT,
+        size_t maxMB = 10,
         bool dbg = false,
-        size_t maxMB = 10
+        const std::string &dir = ""
     ) {
         static std::mutex init_mtx;
         std::lock_guard<std::mutex> lock(init_mtx);
-        static Logger instance(fname, fmt, maxMB, dbg);
+        static Logger instance(fname, fmt, maxMB, dbg, dir);
         return instance;
     }
 
     void log(const std::string &msg, LogType type) {
         std::lock_guard<std::mutex> lock(mtx);
         rotate_if_needed();
+        
+        if (!file.is_open()) {
+            openFile();
+        }
+        
         if (file.is_open()) {
             if (format == FormatType::JSON) {
                 if (!firstJsonEntry) {
@@ -201,7 +246,8 @@ public:
                 file << std::endl;
             }
             
-            file.flush();             
+            file.flush();
+            
             if (debugMode) {
                 std::cout << "[" << current_time() << "] ["
                           << logTypeToString(type) << "] "
@@ -210,48 +256,35 @@ public:
         }
     }
 
-
-
-
-      void log(const std::string &msg, LogType type,std::string t) {
-        std::lock_guard<std::mutex> lock(mtx);
-        rotate_if_needed();
-        if (file.is_open()) {
-            if (format == FormatType::JSON) {
-                if (!firstJsonEntry) {
-                    file << ",\n";
-                } else {
-                    firstJsonEntry = false;
-                }
-            }
-            
-            file << serialize(msg, type);
-            
-            if (format != FormatType::JSON) {
-                file << std::endl;
-            }
-            
-            file.flush();             
-            if (debugMode) {
-                std::cout << "[" << t << "] ["
-                          << logTypeToString(type) << "] "
-                          << msg << std::endl;
-            }
-        }
-    }
-
-
-
     void setDebugStatus(bool status) {
         std::lock_guard<std::mutex> lock(mtx);
         debugMode = status;
     }
 
+    void setLogDirectory(const std::string &dir) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (logDirectory != dir) {
+            logDirectory = dir;
+            if (file.is_open()) {
+                if (format == FormatType::JSON && jsonArrayStarted) {
+                    file << "\n]";
+                }
+                file.close();
+            }
+            
+            std::filesystem::path dirPath(dir);
+            if (!std::filesystem::exists(dirPath)) {
+                std::filesystem::create_directories(dirPath);
+            }
+            
+            openFile();
+        }
+    }
+
     ~Logger() {
         std::lock_guard<std::mutex> lock(mtx);
-    
         if (file.is_open()) {
-            if (format == FormatType::JSON) {
+            if (format == FormatType::JSON && jsonArrayStarted) {
                 file << "\n]";
             }
             file.close();
@@ -260,4 +293,4 @@ public:
 };
 }
 
-#endif 
+#endif

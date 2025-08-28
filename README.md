@@ -1,7 +1,7 @@
 
 # Logger - Header-Only C++ Logging Library
 
-**Version:** 2.0  
+**Version:** 1.0  
 **Author:** tadeyemo32  
 **License:** MIT  
 
@@ -9,7 +9,7 @@
 
 ## Overview
 
-`Logger` is a **thread-safe, header-only C++ logging library** designed for professional applications. It supports multiple log formats, runtime debug control, and automatic log rotation. The library is easy to integrate and requires no external dependencies beyond the C++17 standard library.
+`Logger` is a **thread-safe, header-only C++ logging library** that follows the Singleton design pattern and designed for professional applications. It supports multiple log formats, runtime debug control, and automatic log rotation. The library is easy to integrate and requires no external dependencies beyond the C++17 standard library.
 
 **Features:**
 
@@ -61,9 +61,8 @@ int main() {
 ### Multiple Formats
 
 ```cpp
-auto &txtLogger = Log::Logger::getInstance("app_txt", Log::FormatType::TXT, 10, true);
+auto &txtLogger = Log::Logger::getInstance("app_txt", Log::FormatType::TXT,true,5);
 auto &csvLogger = Log::Logger::getInstance("app_csv", Log::FormatType::CSV, 10);
-auto &xmlLogger = Log::Logger::getInstance("app_xml", Log::FormatType::XML, 5, true);
 ```
 
 - **TXT**: `[timestamp] [level] message`  
